@@ -2,6 +2,7 @@ using FirebirdSql.Data.FirebirdClient;
 using FirebirdSql.Data.Isql;
 using System;
 using System.IO;
+using System.Text;
 
 namespace DbMetaTool
 {
@@ -97,27 +98,83 @@ namespace DbMetaTool
             Console.WriteLine("Creation succeded");
             DirectoryInfo scriptsDirInfo = new(scriptsDirectory);
 
-            List<string> scripts = new List<string>();
+            List<string> domainScripts = new List<string>();
+            List<string> tableScripts = new List<string>();
+            List<string> procedureScripts = new List<string>();
 
             foreach (var file in scriptsDirInfo.GetFiles("*.sql"))
             {
-                scripts.Add(File.ReadAllText(file.FullName));
+                if (file.Name.Contains("domain"))
+                {
+                    domainScripts.Add(file.FullName);
+                    Console.WriteLine($"{file.FullName} added to domains list");
+                }
+                else if (file.Name.Contains("table"))
+                {
+                    tableScripts.Add(file.FullName);
+                    Console.WriteLine($"{file.FullName} added to tables list");
+                }
+                else if (file.Name.Contains("procedure"))
+                {
+                    procedureScripts.Add(file.FullName);
+                    Console.WriteLine($"{file.FullName} added to procedure list");
+                }
+                else
+                    Console.WriteLine($"Nieznany typ skryptu: {file.Name}");
                 Console.WriteLine($"found sql {file.FullName}");
             }
 
-            foreach (var script in scripts)
+            using (var connection = new FbConnection(connectionString))
             {
-                using (var connection = new FbConnection(connectionString))
+                // 1. Domains
+                connection.Open();
+                Console.WriteLine("Doing Domains");
+                foreach (var file in domainScripts)
                 {
-                    connection.Open();
-                    Console.WriteLine($"Connection done");
-                    FbScript fbScript = new(script);
-                    fbScript.Parse();
+                    Console.WriteLine($"Doing Domains {file}");
                     var fbe = new FbBatchExecution(connection);
+                    var fbScript = new FbScript(File.ReadAllText(file));
+                    fbScript.Parse();
                     fbe.AppendSqlStatements(fbScript);
                     fbe.Execute();
-                } 
+                }
+                connection.Close();
+
+                // 2. Tables
+                connection.Open();
+                Console.WriteLine("Doing Tables");
+                foreach (var file in tableScripts)
+                {
+                    Console.WriteLine($"Doing Tables {file}");
+                    var fbe = new FbBatchExecution(connection);
+                    var fbScript = new FbScript(File.ReadAllText(file));
+                    fbScript.Parse();
+                    fbe.AppendSqlStatements(fbScript);
+                    fbe.Execute();
+                }
+                connection.Close();
+
+                // 3. Procedures
+                connection.Open();
+                Console.WriteLine("Doing Procedures");
+                
+                StringBuilder sb = new();
+                foreach (var file in procedureScripts)
+                {
+                    sb.AppendLine("SET TERM ^ ;");
+                    sb.AppendLine(File.ReadAllText(file));
+                    sb.AppendLine("^");
+                    sb.AppendLine("SET TERM ; ^");
+                }
+                Console.WriteLine($"Doing Procedures Concanated");
+                var fbep = new FbBatchExecution(connection);
+                var fbScriptp = new FbScript(sb.ToString());
+                fbScriptp.Parse();
+                fbep.AppendSqlStatements(fbScriptp);
+                fbep.Execute();
+                connection.Close();
             }
+
         }
 
         /// <summary>
