@@ -1,6 +1,7 @@
 using FirebirdSql.Data.FirebirdClient;
 using FirebirdSql.Data.Isql;
 using System;
+using System.Data;
 using System.IO;
 using System.Text;
 
@@ -16,11 +17,14 @@ namespace DbMetaTool
         {
             if (args.Length == 0)
             {
-                Console.WriteLine("Użycie:");
-                Console.WriteLine("  build-db --db-dir <ścieżka> --scripts-dir <ścieżka>");
-                Console.WriteLine("  export-scripts --connection-string <connStr> --output-dir <ścieżka>");
-                Console.WriteLine("  update-db --connection-string <connStr> --scripts-dir <ścieżka>");
-                return 1;
+                //Console.WriteLine("Użycie:");
+                //Console.WriteLine("  build-db --db-dir <ścieżka> --scripts-dir <ścieżka>");
+                //Console.WriteLine("  export-scripts --connection-string <connStr> --output-dir <ścieżka>");
+                //Console.WriteLine("  update-db --connection-string <connStr> --scripts-dir <ścieżka>");
+                //return 1;
+                var _connStr = "data source=localhost;initial catalog=C:\\Users\\oracle.admin\\Desktop\\Workspace\\03_Projects\\Repos\\DbMetaTool\\databaseDirectory\\database.fdb;user id=SYSDBA;password=masterkey;server type=Default";
+                var _outputDir = "C:\\Users\\oracle.admin\\Desktop\\Workspace\\03_Projects\\Repos\\DbMetaTool\\outputDir";
+                ExportScripts(_connStr, _outputDir);
             }
 
             try
@@ -180,13 +184,171 @@ namespace DbMetaTool
         /// <summary>
         /// Generuje skrypty metadanych z istniejącej bazy danych Firebird 5.0.
         /// </summary>
+        /// <summary>
+        /// Generuje skrypty metadanych z istniejącej bazy danych Firebird 5.0.
+        /// </summary>
         public static void ExportScripts(string connectionString, string outputDirectory)
         {
-            // TODO:
-            // 1) Połącz się z bazą danych przy użyciu connectionString.
-            // 2) Pobierz metadane domen, tabel (z kolumnami) i procedur.
-            // 3) Wygeneruj pliki .sql / .json / .txt w outputDirectory.
-            throw new NotImplementedException();
+            using var connection = new FbConnection(connectionString);
+            connection.Open();
+
+            // 1. Export Domains
+            var dt = connection.GetSchema("Domains");
+            foreach (System.Data.DataRow row in dt.Rows)
+            {
+                string name = row["DOMAIN_NAME"].ToString().Trim();
+                // 1. Filter: Skip system domains
+                if (name.StartsWith("RDB$") || name.StartsWith("MON$") || name.StartsWith("SEC$")) continue;
+
+                // 2. Defensive Read: Check for DBNull before reading attributes
+                string type = row["DOMAIN_DATA_TYPE"]?.ToString();
+                // Simple SQL reconstruction (expand logic for precision/scale as needed)
+                string sql = $"CREATE DOMAIN {name} AS {type};";
+
+                File.WriteAllText(Path.Combine(outputDirectory, $"DOMAIN_{name}.sql"), sql);
+                Console.WriteLine($"Exported: {name} Domains");
+            }
+
+            // 2. Export Tables
+            var tables = connection.GetSchema("Tables");
+            foreach (System.Data.DataRow row in tables.Rows)
+            {
+                string tableName = row["TABLE_NAME"].ToString().Trim();
+                if (tableName.StartsWith("RDB$") || tableName.StartsWith("MON$") || tableName.StartsWith("SEC$")) continue;
+
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine($"CREATE TABLE {tableName} (");
+
+                // Get Columns for this table
+                var columns = connection.GetSchema(
+                    "Columns",
+                    new[] { null, null, tableName, null }
+                );
+                List<string> colDefs = new List<string>();
+
+                foreach (System.Data.DataRow col in columns.Rows)
+                {
+                    string colName = col["COLUMN_NAME"].ToString().Trim();
+                    string type = col["COLUMN_DATA_TYPE"].ToString().Trim();
+
+                    // Handle length/precision
+                    if (col["COLUMN_SIZE"] != DBNull.Value && type.Contains("CHAR"))
+                        type += $"({col["COLUMN_SIZE"]})";
+                    else if (col["NUMERIC_PRECISION"] != DBNull.Value && type.Contains("DECIMAL"))
+                        type += $"({col["NUMERIC_PRECISION"]},{col["NUMERIC_SCALE"]})";
+
+                    string definition = $"    {colName} {type}";
+
+                    // Nullable check
+                    if (col["IS_NULLABLE"] != DBNull.Value && (bool)col["IS_NULLABLE"] == false)
+                        definition += " NOT NULL";
+
+                    colDefs.Add(definition);
+                }
+
+                sb.AppendLine(string.Join(",\n", colDefs));
+                sb.AppendLine(");");
+
+                File.WriteAllText(Path.Combine(outputDirectory, $"TABLE_{tableName}.sql"), sb.ToString());
+                Console.WriteLine($"Exported: {tableName} Tables");
+            }
+
+            // 3. Export Procedures with try-catch for debugging
+            try
+            {
+                Console.WriteLine("Starting procedure export...");
+
+                // Use a simpler query first to debug
+                using var cmd = new FbCommand(
+                    "SELECT RDB$PROCEDURE_NAME, RDB$PROCEDURE_SOURCE " +
+                    "FROM RDB$PROCEDURES " +
+                    "WHERE RDB$SYSTEM_FLAG = 0 OR RDB$SYSTEM_FLAG IS NULL",
+                    connection);
+
+                Console.WriteLine($"Command text: {cmd.CommandText}");
+
+                using var reader = cmd.ExecuteReader();
+
+                Console.WriteLine($"Reader field count: {reader.FieldCount}");
+                for (int i = 0; i < reader.FieldCount; i++)
+                {
+                    Console.WriteLine($"  Column {i}: {reader.GetName(i)}");
+                }
+
+                int procedureCount = 0;
+                while (reader.Read())
+                {
+                    procedureCount++;
+                    Console.WriteLine($"Processing procedure #{procedureCount}");
+
+                    try
+                    {
+                        if (!HasColumn(reader, "RDB$PROCEDURE_NAME"))
+                        {
+                            Console.WriteLine("Warning: Column RDB$PROCEDURE_NAME not found");
+                            continue;
+                        }
+
+                        string name = reader["RDB$PROCEDURE_NAME"].ToString().Trim();
+                        Console.WriteLine($"Found procedure: {name}");
+
+                        // Check if source column exists
+                        if (!HasColumn(reader, "RDB$PROCEDURE_SOURCE"))
+                        {
+                            Console.WriteLine($"Warning: Column RDB$PROCEDURE_SOURCE not found for procedure {name}");
+                            continue;
+                        }
+
+                        object sourceObj = reader["RDB$PROCEDURE_SOURCE"];
+                        if (sourceObj == DBNull.Value || sourceObj == null)
+                        {
+                            Console.WriteLine($"Skipping {name} (Metadata source is NULL)");
+                            continue;
+                        }
+
+                        string source = sourceObj.ToString();
+
+                        // Reconstruct the full SQL with terminators
+                        string sql = $"SET TERM ^ ;\nCREATE OR ALTER PROCEDURE {name}\n{source}\n^\nSET TERM ; ^";
+
+                        string fileName = Path.Combine(outputDirectory, $"PROC_{name}.sql");
+                        File.WriteAllText(fileName, sql);
+                        Console.WriteLine($"Exported Procedure: {name}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error processing procedure row: {ex.Message}");
+                    }
+                }
+
+                if (procedureCount == 0)
+                {
+                    Console.WriteLine("No procedures found in the database.");
+                }
+                else
+                {
+                    Console.WriteLine($"Total procedures processed: {procedureCount}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error exporting procedures: {ex.Message}");
+                Console.WriteLine($"Stack trace: {ex.StackTrace}");
+                throw;
+            }
+        }
+
+        //check if a column exists
+        private static bool HasColumn(IDataRecord record, string columnName)
+        {
+            try
+            {
+                return record.GetOrdinal(columnName) >= 0;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>
