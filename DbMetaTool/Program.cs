@@ -83,6 +83,9 @@ namespace DbMetaTool
         /// <summary>
         /// Buduje nową bazę danych Firebird 5.0 na podstawie skryptów.
         /// </summary>
+        /// <summary>
+        /// Buduje nową bazę danych Firebird 5.0 na podstawie skryptów.
+        /// </summary>
         public static void BuildDatabase(string databaseDirectory, string scriptsDirectory)
         {
             FbConnectionStringBuilder csb = new()
@@ -105,17 +108,18 @@ namespace DbMetaTool
 
             foreach (var file in scriptsDirInfo.GetFiles("*.sql"))
             {
-                if (file.Name.Contains("domain"))
+                string fileName = file.Name.ToLowerInvariant();
+                if (fileName.Contains("domain"))
                 {
                     domainScripts.Add(file.FullName);
                     Console.WriteLine($"{file.FullName} added to domains list");
                 }
-                else if (file.Name.Contains("table"))
+                else if (fileName.Contains("table"))
                 {
                     tableScripts.Add(file.FullName);
                     Console.WriteLine($"{file.FullName} added to tables list");
                 }
-                else if (file.Name.Contains("procedure"))
+                else if (fileName.Contains("procedure"))
                 {
                     procedureScripts.Add(file.FullName);
                     Console.WriteLine($"{file.FullName} added to procedure list");
@@ -127,65 +131,37 @@ namespace DbMetaTool
 
             using (var connection = new FbConnection(connectionString))
             {
-                // 1. Domains
+                // STEP 4: Open once at the start
                 connection.Open();
-                Console.WriteLine("Doing Domains");
-                foreach (var file in domainScripts)
-                {
-                    Console.WriteLine($"Doing Domains {file}");
-                    var fbe = new FbBatchExecution(connection);
-                    var fbScript = new FbScript(File.ReadAllText(file));
-                    fbScript.Parse();
-                    fbe.AppendSqlStatements(fbScript);
-                    fbe.Execute();
-                }
-                connection.Close();
+
+                // 1. Domains
+                ExecuteScripts(domainScripts, connection);
 
                 // 2. Tables
-                connection.Open();
-                Console.WriteLine("Doing Tables");
-                foreach (var file in tableScripts)
-                {
-                    Console.WriteLine($"Doing Tables {file}");
-                    var fbe = new FbBatchExecution(connection);
-                    var fbScript = new FbScript(File.ReadAllText(file));
-                    fbScript.Parse();
-                    fbe.AppendSqlStatements(fbScript);
-                    fbe.Execute();
-                }
-                connection.Close();
+                ExecuteScripts(tableScripts, connection);
 
                 // 3. Procedures
-                connection.Open();
                 Console.WriteLine("Doing Procedures");
 
-                StringBuilder sb = new();
-                foreach (var file in procedureScripts)
-                {
-                    sb.AppendLine("SET TERM ^ ;");
-                    sb.AppendLine(File.ReadAllText(file));
-                    sb.AppendLine("^");
-                    sb.AppendLine("SET TERM ; ^");
-                }
+                string sb = BuildProceduresSqlWithSetTerm(procedureScripts);
                 Console.WriteLine($"Doing Procedures Concanated");
                 var fbep = new FbBatchExecution(connection);
-                var fbScriptp = new FbScript(sb.ToString());
+                var fbScriptp = new FbScript(sb);
                 fbScriptp.Parse();
                 fbep.AppendSqlStatements(fbScriptp);
                 fbep.Execute();
-                connection.Close();
             }
-
         }
 
         /// <summary>
         /// Generuje skrypty metadanych z istniejącej bazy danych Firebird 5.0.
         /// </summary>
-        /// <summary>
-        /// Generuje skrypty metadanych z istniejącej bazy danych Firebird 5.0.
-        /// </summary>
         public static void ExportScripts(string connectionString, string outputDirectory)
         {
+            if (!Directory.Exists(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
             using var connection = new FbConnection(connectionString);
             connection.Open();
 
@@ -355,49 +331,49 @@ namespace DbMetaTool
         {
             using var connection = new FbConnection(connectionString);
             connection.Open();
-            var domainScripts = new List<string>();
-            var tableScripts = new List<string>();
-            var procedureScripts = new List<string>();
-            foreach (var file in Directory.GetFiles(scriptsDirectory, "*.sql"))
-            {
-                var name = Path.GetFileName(file).ToLowerInvariant();
 
-                if (name.Contains("domain"))
-                    domainScripts.Add(file);
-                else if (name.Contains("table"))
-                    tableScripts.Add(file);
-                else if (name.Contains("proc"))
-                    procedureScripts.Add(file);
-            }
-            ExecuteScripts(domainScripts,connection);
-            ExecuteScripts(tableScripts, connection);
-            if (procedureScripts.Count > 0)
-            {
-                var sb = new StringBuilder();
+            using var transaction = connection.BeginTransaction();
 
-                foreach (var file in procedureScripts)
+            try
+            {
+                var domainScripts = new List<string>();
+                var tableScripts = new List<string>();
+                var procedureScripts = new List<string>();
+
+                foreach (var file in Directory.GetFiles(scriptsDirectory, "*.sql"))
                 {
-                    sb.AppendLine("SET TERM ^ ;");
-                    sb.AppendLine(File.ReadAllText(file));
-                    sb.AppendLine("^");
-                    sb.AppendLine("SET TERM ; ^");
+                    var name = Path.GetFileName(file).ToLowerInvariant();
+
+                    if (name.Contains("domain"))
+                        domainScripts.Add(file);
+                    else if (name.Contains("table"))
+                        tableScripts.Add(file);
+                    else if (name.Contains("proc"))
+                        procedureScripts.Add(file);
                 }
 
-                var fbe = new FbBatchExecution(connection);
-                var script = new FbScript(sb.ToString());
-                script.Parse();
-                fbe.AppendSqlStatements(script);
-                fbe.Execute();
+                ExecuteScripts(domainScripts, connection);
+                ExecuteScripts(tableScripts, connection);
+
+                if (procedureScripts.Count > 0)
+                {
+                    string sql = BuildProceduresSqlWithSetTerm(procedureScripts);
+
+                    var fbe = new FbBatchExecution(connection);
+                    var script = new FbScript(sql);
+                    script.Parse();
+                    fbe.AppendSqlStatements(script);
+                    fbe.Execute();
+                }
+
+                transaction.Commit();
             }
-
-            // TODO:
-            // 1) Połącz się z bazą danych przy użyciu connectionString.
-            // 2) Wykonaj skrypty z katalogu scriptsDirectory (tylko obsługiwane elementy).
-            // 3) Zadbaj o poprawną kolejność i bezpieczeństwo zmian.
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
         }
-
-
-
 
         static void ExecuteScripts(IEnumerable<string> scripts, FbConnection connection)
         {
@@ -412,5 +388,19 @@ namespace DbMetaTool
                 fbe.Execute();
             }
         }
+
+        static string BuildProceduresSqlWithSetTerm(IEnumerable<string> procedureScripts)
+        {
+            StringBuilder sb = new();
+            foreach (var file in procedureScripts)
+            {
+                sb.AppendLine("SET TERM ^ ;");
+                sb.AppendLine(File.ReadAllText(file));
+                sb.AppendLine("^");
+                sb.AppendLine("SET TERM ; ^");
+            }
+            return sb.ToString();
+        } 
     }
 }
+
