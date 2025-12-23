@@ -17,14 +17,11 @@ namespace DbMetaTool
         {
             if (args.Length == 0)
             {
-                //Console.WriteLine("Użycie:");
-                //Console.WriteLine("  build-db --db-dir <ścieżka> --scripts-dir <ścieżka>");
-                //Console.WriteLine("  export-scripts --connection-string <connStr> --output-dir <ścieżka>");
-                //Console.WriteLine("  update-db --connection-string <connStr> --scripts-dir <ścieżka>");
-                //return 1;
-                var _connStr = "data source=localhost;initial catalog=C:\\Users\\oracle.admin\\Desktop\\Workspace\\03_Projects\\Repos\\DbMetaTool\\databaseDirectory\\database.fdb;user id=SYSDBA;password=masterkey;server type=Default";
-                var _outputDir = "C:\\Users\\oracle.admin\\Desktop\\Workspace\\03_Projects\\Repos\\DbMetaTool\\outputDir";
-                ExportScripts(_connStr, _outputDir);
+                Console.WriteLine("Użycie:");
+                Console.WriteLine("  build-db --db-dir <ścieżka> --scripts-dir <ścieżka>");
+                Console.WriteLine("  export-scripts --connection-string <connStr> --output-dir <ścieżka>");
+                Console.WriteLine("  update-db --connection-string <connStr> --scripts-dir <ścieżka>");
+                return 1;
             }
 
             try
