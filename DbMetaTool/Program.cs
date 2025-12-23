@@ -131,7 +131,6 @@ namespace DbMetaTool
 
             using (var connection = new FbConnection(connectionString))
             {
-                // STEP 4: Open once at the start
                 connection.Open();
 
                 // 1. Domains
