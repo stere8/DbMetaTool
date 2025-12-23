@@ -158,7 +158,7 @@ namespace DbMetaTool
                 // 3. Procedures
                 connection.Open();
                 Console.WriteLine("Doing Procedures");
-                
+
                 StringBuilder sb = new();
                 foreach (var file in procedureScripts)
                 {
@@ -353,11 +353,64 @@ namespace DbMetaTool
         /// </summary>
         public static void UpdateDatabase(string connectionString, string scriptsDirectory)
         {
+            using var connection = new FbConnection(connectionString);
+            connection.Open();
+            var domainScripts = new List<string>();
+            var tableScripts = new List<string>();
+            var procedureScripts = new List<string>();
+            foreach (var file in Directory.GetFiles(scriptsDirectory, "*.sql"))
+            {
+                var name = Path.GetFileName(file).ToLowerInvariant();
+
+                if (name.Contains("domain"))
+                    domainScripts.Add(file);
+                else if (name.Contains("table"))
+                    tableScripts.Add(file);
+                else if (name.Contains("proc"))
+                    procedureScripts.Add(file);
+            }
+            ExecuteScripts(domainScripts,connection);
+            ExecuteScripts(tableScripts, connection);
+            if (procedureScripts.Count > 0)
+            {
+                var sb = new StringBuilder();
+
+                foreach (var file in procedureScripts)
+                {
+                    sb.AppendLine("SET TERM ^ ;");
+                    sb.AppendLine(File.ReadAllText(file));
+                    sb.AppendLine("^");
+                    sb.AppendLine("SET TERM ; ^");
+                }
+
+                var fbe = new FbBatchExecution(connection);
+                var script = new FbScript(sb.ToString());
+                script.Parse();
+                fbe.AppendSqlStatements(script);
+                fbe.Execute();
+            }
+
             // TODO:
             // 1) Połącz się z bazą danych przy użyciu connectionString.
             // 2) Wykonaj skrypty z katalogu scriptsDirectory (tylko obsługiwane elementy).
             // 3) Zadbaj o poprawną kolejność i bezpieczeństwo zmian.
-            throw new NotImplementedException();
+        }
+
+
+
+
+        static void ExecuteScripts(IEnumerable<string> scripts, FbConnection connection)
+        {
+            foreach (var file in scripts)
+            {
+                Console.WriteLine($"Executing {Path.GetFileName(file)}");
+
+                var fbe = new FbBatchExecution(connection);
+                var script = new FbScript(File.ReadAllText(file));
+                script.Parse();
+                fbe.AppendSqlStatements(script);
+                fbe.Execute();
+            }
         }
     }
 }
